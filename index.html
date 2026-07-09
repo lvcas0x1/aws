@@ -72,6 +72,7 @@
     <li><a href="#extras">追加ガバナンス機能 ⬜</a></li>
     <li><a href="#cost">コスト</a></li>
     <li><a href="#rules">運用の禁止事項</a></li>
+    <li><a href="#terraform">付録: 管理アカウントの Terraform 化</a></li>
   </ol>
 </nav>
 
@@ -92,6 +93,7 @@
     <li>IAM Access Analyzer（組織アナライザー作成）</li>
     <li>GuardDuty トライアル終了前（8月上旬）に Usage 画面で月額試算を確認</li>
     <li>フェーズ6: Account Factory でアカウント払い出し（予定: Network / Shared / Operation ＋ Infra CICD / App CICD）</li>
+    <li>管理アカウントベースラインの IaC 化（Terraform import。付録参照。Infra CICD 払い出し後）</li>
     <li>追加: ルートアクセス集中管理 / RCP / AWS Budgets アラート</li>
   </ul>
 </section>
@@ -406,6 +408,183 @@
     <li>CloudTrail / Aggregator アカウントを他 OU へ移動しない。Security OU に他のアカウントを入れない</li>
     <li>アカウント作成は Account Factory 経由。ルートユーザーは緊急時以外使わない</li>
   </ul>
+</section>
+
+<!-- ============ 付録: Terraform ============ -->
+<section id="terraform">
+  <h2>付録: 管理アカウントベースラインの Terraform 化（Landing Zone 4.0）<span class="acct">実行: 管理アカウント</span></h2>
+  <p>フェーズ4「管理アカウントの特別対応」で手動設定した Config / Security Hub をコード管理する場合の参考実装。
+  方針：<strong>CT と同じ設定値（全リソース記録・グローバルリソースはホームリージョンのみ・継続的記録）をコードに明示する</strong>。CT 管理リソースの流用や import はしない。</p>
+
+  <pre><code>terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "&gt;= 5.32"   # securityhub_configuration_policy_association 対応バージョン
+    }
+  }
+}
+
+provider "aws" { region = "ap-northeast-1" }                    # 管理アカウント・東京
+provider "aws" {
+  alias  = "osaka"
+  region = "ap-northeast-3"                                     # 管理アカウント・大阪
+}
+provider "aws" {                                                # Aggregator（ポリシー関連付け用）
+  alias  = "aggregator"
+  region = "ap-northeast-1"
+  assume_role {
+    role_arn = "arn:aws:iam::&lt;AggregatorアカウントID&gt;:role/AWSControlTowerExecution"
+  }
+}
+
+data "aws_caller_identity" "current" {}
+
+# ---- Config 用サービスリンクロール（アカウントに1つ・全リージョン共用）----
+resource "aws_iam_service_linked_role" "config" {
+  aws_service_name = "config.amazonaws.com"
+}
+
+# ---- 配信先 S3（東京に1つ。大阪からもクロスリージョン配信）----
+resource "aws_s3_bucket" "config" {
+  bucket = "config-bucket-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "config" {
+  bucket                  = aws_s3_bucket.config.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "config" {
+  bucket = aws_s3_bucket.config.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_policy" "config" {
+  bucket = aws_s3_bucket.config.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AWSConfigBucketPermissionsCheck"
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = ["s3:GetBucketAcl", "s3:ListBucket"]
+        Resource  = aws_s3_bucket.config.arn
+        Condition = { StringEquals = { "AWS:SourceAccount" = data.aws_caller_identity.current.account_id } }
+      },
+      {
+        Sid       = "AWSConfigBucketDelivery"
+        Effect    = "Allow"
+        Principal = { Service = "config.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.config.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/Config/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"      = "bucket-owner-full-control"
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+# ---- Config レコーダー：東京（グローバルリソース記録 ON）----
+resource "aws_config_configuration_recorder" "tokyo" {
+  name     = "default"
+  role_arn = aws_iam_service_linked_role.config.arn
+  recording_group {
+    all_supported                 = true
+    include_global_resource_types = true
+  }
+}
+
+resource "aws_config_delivery_channel" "tokyo" {
+  name           = "default"
+  s3_bucket_name = aws_s3_bucket.config.id
+  depends_on     = [aws_config_configuration_recorder.tokyo, aws_s3_bucket_policy.config]
+}
+
+resource "aws_config_configuration_recorder_status" "tokyo" {
+  name       = aws_config_configuration_recorder.tokyo.name
+  is_enabled = true
+  depends_on = [aws_config_delivery_channel.tokyo]
+}
+
+# ---- Config レコーダー：大阪（グローバルリソース記録 OFF ＝ 二重記録防止）----
+resource "aws_config_configuration_recorder" "osaka" {
+  provider = aws.osaka
+  name     = "default"
+  role_arn = aws_iam_service_linked_role.config.arn
+  recording_group {
+    all_supported                 = true
+    include_global_resource_types = false
+  }
+}
+
+resource "aws_config_delivery_channel" "osaka" {
+  provider       = aws.osaka
+  name           = "default"
+  s3_bucket_name = aws_s3_bucket.config.id
+  depends_on     = [aws_config_configuration_recorder.osaka, aws_s3_bucket_policy.config]
+}
+
+resource "aws_config_configuration_recorder_status" "osaka" {
+  provider   = aws.osaka
+  name       = aws_config_configuration_recorder.osaka.name
+  is_enabled = true
+  depends_on = [aws_config_delivery_channel.osaka]
+}
+
+# ---- Security Hub 有効化（標準は中央設定ポリシーに委ねる）----
+resource "aws_securityhub_account" "tokyo" {
+  enable_default_standards = false
+  depends_on               = [aws_config_configuration_recorder_status.tokyo]
+}
+
+resource "aws_securityhub_account" "osaka" {
+  provider                 = aws.osaka
+  enable_default_standards = false
+  depends_on               = [aws_config_configuration_recorder_status.osaka]
+}
+
+# ---- 中央設定ポリシーの関連付け（Aggregator から実行）----
+resource "aws_securityhub_configuration_policy_association" "mgmt" {
+  provider   = aws.aggregator
+  target_id  = data.aws_caller_identity.current.account_id
+  policy_id  = "&lt;中央設定ポリシーの ID（Security Hub コンソール → 設定 → ポリシーで確認）&gt;"
+  depends_on = [aws_securityhub_account.tokyo, aws_securityhub_account.osaka]
+}</code></pre>
+
+  <h3>注意点（Landing Zone 4.0）</h3>
+  <ul>
+    <li><strong>CT 管理リソースを Terraform で import・変更しない</strong>：メンバーアカウントのレコーダー（StackSet 配布）、<code>aws-controltower-config-logs-*</code> バケット（v4.0 では Aggregator 内）、CT の SCP など。触るとドリフト</li>
+    <li><strong>中央設定ポリシー本体は TF 管理にしない</strong>（<code>policy_id</code> で参照のみ）。Security Hub 全体を IaC 化する段階で計画的に import する</li>
+    <li><strong><code>enable_default_standards = false</code> が必須</strong>：忘れると FSBP＋CIS が自動有効化され、中央設定ポリシーと二重管理になる</li>
+    <li>適用順序（Config → Security Hub → ポリシー関連付け）は <code>depends_on</code> で表現済み。崩すとコンソールで見たのと同じエラーが API でも発生する</li>
+    <li>Aggregator への <code>assume_role</code> には CT が全登録アカウントに配布済みの <code>AWSControlTowerExecution</code> ロールを利用（管理アカウントから実行する前提）</li>
+    <li>サービスリンクロールはアカウントに1つ（リージョンごとに作らない）。大阪側は東京で作ったロールを参照</li>
+    <li><strong>今回はコンソール設定済みのため、新規 apply ではなく import → <code>terraform plan</code> で差分ゼロを確認する</strong>（下記コマンド）</li>
+    <li>実行場所は将来的に Infra CICD アカウント（State もそこの S3 へ）。それまでローカル実行する場合、State ファイルに設定情報が含まれるため取り扱いに注意</li>
+  </ul>
+
+  <h3>既存リソースの import（コンソール設定済み分の取り込み）</h3>
+  <pre><code>terraform import aws_iam_service_linked_role.config \
+  arn:aws:iam::&lt;管理アカウントID&gt;:role/aws-service-role/config.amazonaws.com/AWSServiceRoleForConfig
+terraform import aws_s3_bucket.config config-bucket-&lt;管理アカウントID&gt;
+terraform import aws_config_configuration_recorder.tokyo default
+terraform import aws_config_delivery_channel.tokyo default
+terraform import aws_config_configuration_recorder_status.tokyo default
+terraform import aws_config_configuration_recorder.osaka default
+terraform import aws_config_delivery_channel.osaka default
+terraform import aws_config_configuration_recorder_status.osaka default
+terraform import aws_securityhub_account.tokyo &lt;管理アカウントID&gt;
+terraform import aws_securityhub_account.osaka &lt;管理アカウントID&gt;
+terraform import aws_securityhub_configuration_policy_association.mgmt &lt;管理アカウントID&gt;</code></pre>
 </section>
 
 </main>
