@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AWS ガバナンス基盤 構築ランブック（Control Tower）</title>
+<style>
+  :root {
+    --aws-orange: #ff9900; --aws-dark: #232f3e; --aws-blue: #146eb4;
+    --bg: #f7f8fa; --card: #fff; --border: #e1e4e8; --text: #2c3038; --muted: #6a737d;
+    --green: #1d8102; --red: #d13212;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif; background: var(--bg); color: var(--text); margin: 0; line-height: 1.7; }
+  header { background: linear-gradient(135deg, var(--aws-dark) 0%, #37475a 100%); color: #fff; padding: 32px 24px; text-align: center; }
+  header h1 { margin: 0 0 8px; font-size: 1.6em; }
+  header p { margin: 2px 0; color: #d5dbdb; font-size: .9em; }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 20px 60px; }
+  nav.toc { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 24px; margin: 20px 0; }
+  nav.toc ol { margin: 6px 0; padding-left: 1.4em; columns: 2; }
+  nav.toc a { color: var(--aws-blue); text-decoration: none; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 22px 28px; margin: 20px 0; }
+  h2 { font-size: 1.3em; color: var(--aws-dark); border-bottom: 3px solid var(--aws-orange); padding-bottom: 6px; margin-top: 0; }
+  h3 { font-size: 1.05em; color: var(--aws-dark); margin: 24px 0 8px; border-left: 5px solid var(--aws-orange); padding-left: 10px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: .92em; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--aws-dark); color: #fff; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  code { background: #eef1f4; border-radius: 4px; padding: 1px 6px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: .88em; }
+  pre { background: var(--aws-dark); color: #e8eaed; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: .85em; line-height: 1.55; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .warn, .danger { border-radius: 8px; padding: 10px 16px; margin: 12px 0; font-size: .92em; }
+  .warn { background: #fff8e1; border-left: 5px solid var(--aws-orange); }
+  .danger { background: #fdf0ee; border-left: 5px solid var(--red); }
+  .warn::before { content: "⚠️ "; }
+  .danger::before { content: "🚨 "; }
+  .phase-label { display: inline-block; background: var(--aws-orange); color: var(--aws-dark); font-weight: bold; border-radius: 6px; padding: 1px 10px; margin-right: 8px; font-size: .8em; vertical-align: middle; }
+  .acct { display: inline-block; background: #eef6fc; color: var(--aws-blue); border: 1px solid var(--aws-blue); border-radius: 6px; padding: 1px 10px; font-size: .68em; font-weight: bold; vertical-align: middle; margin-left: 8px; }
+  .done { color: var(--green); font-weight: bold; }
+  .todo { color: var(--aws-blue); font-weight: bold; }
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding-left: 30px; position: relative; margin: 5px 0; }
+  .checklist li::before { content: "☐"; position: absolute; left: 4px; font-size: 1.1em; color: var(--aws-blue); }
+  .checklist li.ok::before { content: "☑"; color: var(--green); }
+  .diagram { margin: 16px 0; text-align: center; }
+  .diagram svg { max-width: 100%; height: auto; }
+  footer { text-align: center; color: var(--muted); font-size: .82em; padding: 16px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AWS ガバナンス基盤 構築ランブック</h1>
+  <p>Control Tower（Landing Zone v4.0）／ ホームリージョン: ap-northeast-1（東京）＋大阪</p>
+  <p>最終更新: 2026-07-09（コンソール手順・最新ドキュメント照合済み）</p>
+</header>
+
+<main>
+
+<nav class="toc">
+  <strong>目次</strong>
+  <ol>
+    <li><a href="#status">進捗サマリー</a></li>
+    <li><a href="#services">サービスの役割（一覧）</a></li>
+    <li><a href="#architecture">全体構成図</a></li>
+    <li><a href="#phase0">フェーズ0: 事前準備 ✅</a></li>
+    <li><a href="#phase2">フェーズ2: Control Tower ✅</a></li>
+    <li><a href="#phase3">フェーズ3: OU・コントロール 🔄</a></li>
+    <li><a href="#phase4">フェーズ4: Security Hub ⬜</a></li>
+    <li><a href="#phase5">フェーズ5: GuardDuty ほか ⬜</a></li>
+    <li><a href="#phase6">フェーズ6: Account Factory ⬜</a></li>
+    <li><a href="#extras">追加ガバナンス機能 ⬜</a></li>
+    <li><a href="#cost">コスト</a></li>
+    <li><a href="#rules">運用の禁止事項</a></li>
+  </ol>
+</nav>
+
+<!-- ============ 進捗 ============ -->
+<section id="status">
+  <h2>進捗サマリー（2026-07-09 時点）</h2>
+  <ul class="checklist">
+    <li class="ok">フェーズ0: 事前準備（MFA・メール2つ・リージョン確認）</li>
+    <li class="ok">フェーズ2: Landing Zone 構築完了（KMSなし・東京＋大阪・Backupスキップ）</li>
+    <li class="ok">フェーズ3: OU作成完了・全OU Control Tower 管理下。共有アカウントを CloudTrail / Aggregator にリネーム</li>
+    <li class="ok">コントロール試行: <code>AWS-GR_ENCRYPTED_VOLUMES</code> を Sandbox OU に適用済み</li>
+    <li>コントロール検証: Sandbox にテストアカウント作成 → 非暗号化 EBS で Noncompliant 確認（手順はフェーズ3）</li>
+    <li>コントロール本適用: 予防的→親OU、発見的→各子OU（下の展開方針参照）</li>
+    <li class="ok">フェーズ4: Security Hub 完了（委任 = Aggregator ／ CIS v1.2.0 無効化 ／ FSBP v1.0.0 ＋ Resource Tagging v1.0.0 ／ 中央設定 = 組織全体）</li>
+    <li class="ok">フェーズ5: GuardDuty 完了（委任 = Aggregator ／ 全保護プラン有効 ／ 東京・大阪）</li>
+    <li class="ok">管理アカウント特別対応: Config・Security Hub 手動有効化 → ポリシー再適用済み（フェーズ4参照）</li>
+    <li>Slack 通知: findings → EventBridge（CRITICAL / HIGH のみ）→ SNS → Chatbot</li>
+    <li>IAM Access Analyzer（組織アナライザー作成）</li>
+    <li>GuardDuty トライアル終了前（8月上旬）に Usage 画面で月額試算を確認</li>
+    <li>フェーズ6: Account Factory でアカウント払い出し（予定: Network / Shared / Operation ＋ Infra CICD / App CICD）</li>
+    <li>追加: ルートアクセス集中管理 / RCP / AWS Budgets アラート</li>
+  </ul>
+</section>
+
+<!-- ============ サービス ============ -->
+<section id="services">
+  <h2>アカウント早見表・サービスの役割</h2>
+  <h3>どのアカウントで操作するか（早見表）</h3>
+  <table>
+    <tr><th>アカウント</th><th>正体</th><th>入り方</th><th>主にやること</th></tr>
+    <tr><td><strong>管理アカウント</strong></td><td>組織の親。Control Tower / Organizations / 請求の本拠地</td><td>アクセスポータル → 管理アカウント → <strong>AWSAdministratorAccess</strong></td><td>Control Tower の全操作（OU・コントロール・Account Factory）、各サービスの「委任管理者の指定」、Organizations のポリシー（SCP / RCP）</td></tr>
+    <tr><td><strong>Aggregator</strong>（Security OU 配下）</td><td>旧 Audit。監査・セキュリティの集約先</td><td>アクセスポータル → <code>Aggregator</code> → <strong>AWSAdministratorAccess</strong></td><td>委任を受けた後の運用：Security Hub の中央設定・検出結果の確認、GuardDuty のメンバー管理。<strong>日常のセキュリティチェックはここを見る</strong></td></tr>
+    <tr><td><strong>CloudTrail</strong>（Security OU 配下）</td><td>旧 Log Archive。ログ保管専用</td><td>—（基本ログインしない）</td><td>操作しない。インシデント調査で S3 のログを参照する時のみ</td></tr>
+  </table>
+  <h3>サービスの役割（一覧）</h3>
+  <table>
+    <tr><th>サービス</th><th>役割</th></tr>
+    <tr><td>AWS Organizations</td><td>マルチアカウントの土台。SCP / RCP を組織全体に強制。OU＝アカウントのグループ（ポリシー継承の単位）</td></tr>
+    <tr><td>Control Tower</td><td>司令塔。Organizations・Config・CloudTrail・Identity Center を束ねてベストプラクティス構成を自動構築・維持。ルール＝コントロール（ガードレール）、逸脱＝ドリフトとして検知</td></tr>
+    <tr><td>Landing Zone</td><td>Control Tower が構築する「完成されたマルチアカウント環境」一式。1組織に1つ。ホームリージョンは変更不可</td></tr>
+    <tr><td>IAM Identity Center</td><td>SSO。全アカウントへのログインと権限を一元管理。日常作業は Identity Center ユーザー（AWSAdministratorAccess）で行い、ルートは使わない</td></tr>
+    <tr><td>AWS Config</td><td>リソース設定の記録・変更履歴。Landing Zone 構築時に全アカウント自動有効化（管理アカウントのみ対象外→手動対応）。発見的コントロールの実行エンジン。履歴ファイルの集約先は v4.0 では Aggregator 内の <code>aws-controltower-config-logs-*</code> バケット、組織横断ビューは Aggregator の組織アグリゲータ</td></tr>
+    <tr><td>CloudTrail</td><td>組織全体の API 操作ログ（組織証跡 <code>aws-controltower-BaselineCloudTrail</code>）。CloudTrail アカウントの S3 に集約・改ざん防止</td></tr>
+    <tr><td>Security Hub CSPM</td><td>セキュリティ検出結果の一元集約＋FSBP / CIS 等の標準チェック。Aggregator アカウントに集約（フェーズ4）</td></tr>
+    <tr><td>GuardDuty</td><td>脅威検知（不正ログイン・マルウェア通信等）。検知結果は Security Hub に連携（フェーズ5）</td></tr>
+    <tr><td>共有アカウント</td><td><strong>Aggregator</strong>（旧 Audit：監査集約・各種委任管理者先）／<strong>CloudTrail</strong>（旧 Log Archive：ログ保管専用・日常は触らない）</td></tr>
+  </table>
+</section>
+
+<!-- ============ 構成図 ============ -->
+<section id="architecture">
+  <h2>全体構成図</h2>
+  <div class="diagram">
+  <svg viewBox="0 0 940 620" xmlns="http://www.w3.org/2000/svg" font-family="'Hiragino Kaku Gothic ProN', Meiryo, sans-serif">
+    <rect x="10" y="10" width="920" height="600" rx="12" fill="#f0f4f8" stroke="#232f3e" stroke-width="2.5"/>
+    <text x="30" y="42" font-size="18" font-weight="bold" fill="#232f3e">AWS Organizations（組織）</text>
+    <rect x="300" y="60" width="340" height="86" rx="8" fill="#232f3e"/>
+    <text x="470" y="88" font-size="15" font-weight="bold" fill="#ff9900" text-anchor="middle">管理アカウント</text>
+    <text x="470" y="110" font-size="12" fill="#ffffff" text-anchor="middle">Control Tower ／ Organizations ／ 請求の一元管理</text>
+    <text x="470" y="130" font-size="12" fill="#ffffff" text-anchor="middle">IAM Identity Center（SSOログインの入り口）</text>
+    <line x1="470" y1="146" x2="470" y2="176" stroke="#232f3e" stroke-width="2"/>
+    <line x1="160" y1="176" x2="780" y2="176" stroke="#232f3e" stroke-width="2"/>
+    <line x1="160" y1="176" x2="160" y2="206" stroke="#232f3e" stroke-width="2"/>
+    <line x1="470" y1="176" x2="470" y2="206" stroke="#232f3e" stroke-width="2"/>
+    <line x1="780" y1="176" x2="780" y2="206" stroke="#232f3e" stroke-width="2"/>
+    <rect x="40" y="206" width="250" height="230" rx="10" fill="#fdf0ee" stroke="#d13212" stroke-width="2"/>
+    <text x="165" y="234" font-size="15" font-weight="bold" fill="#d13212" text-anchor="middle">Security OU（CT自動管理）</text>
+    <rect x="60" y="250" width="210" height="80" rx="6" fill="#ffffff" stroke="#d13212"/>
+    <text x="165" y="274" font-size="13" font-weight="bold" fill="#232f3e" text-anchor="middle">Aggregator（Audit）</text>
+    <text x="165" y="294" font-size="11" fill="#555" text-anchor="middle">SecurityHub / GuardDuty / Config の</text>
+    <text x="165" y="310" font-size="11" fill="#555" text-anchor="middle">集約先（委任管理者・アグリゲータ）</text>
+    <rect x="60" y="342" width="210" height="80" rx="6" fill="#ffffff" stroke="#d13212"/>
+    <text x="165" y="366" font-size="13" font-weight="bold" fill="#232f3e" text-anchor="middle">CloudTrail（Log Archive）</text>
+    <text x="165" y="386" font-size="11" fill="#555" text-anchor="middle">組織証跡（CloudTrail）ログを</text>
+    <text x="165" y="402" font-size="11" fill="#555" text-anchor="middle">S3に集約保管（改ざん防止）</text>
+    <rect x="330" y="206" width="290" height="230" rx="10" fill="#eef6fc" stroke="#146eb4" stroke-width="2"/>
+    <text x="475" y="234" font-size="15" font-weight="bold" fill="#146eb4" text-anchor="middle">Workloads OU</text>
+    <rect x="350" y="250" width="120" height="170" rx="6" fill="#ffffff" stroke="#146eb4"/>
+    <text x="410" y="274" font-size="13" font-weight="bold" fill="#232f3e" text-anchor="middle">dev / staging</text>
+    <rect x="362" y="304" width="96" height="42" rx="4" fill="#f0f4f8" stroke="#aab"/>
+    <text x="410" y="330" font-size="11" fill="#333" text-anchor="middle">dev アカウント</text>
+    <rect x="362" y="356" width="96" height="42" rx="4" fill="#f0f4f8" stroke="#aab"/>
+    <text x="410" y="382" font-size="11" fill="#333" text-anchor="middle">stg アカウント</text>
+    <rect x="486" y="250" width="120" height="170" rx="6" fill="#ffffff" stroke="#146eb4"/>
+    <text x="546" y="274" font-size="13" font-weight="bold" fill="#232f3e" text-anchor="middle">prod</text>
+    <rect x="498" y="304" width="96" height="42" rx="4" fill="#f0f4f8" stroke="#aab"/>
+    <text x="546" y="330" font-size="11" fill="#333" text-anchor="middle">prod アカウント</text>
+    <rect x="660" y="206" width="240" height="230" rx="10" fill="#f0f9ec" stroke="#1d8102" stroke-width="2"/>
+    <text x="780" y="234" font-size="15" font-weight="bold" fill="#1d8102" text-anchor="middle">その他の OU</text>
+    <rect x="680" y="250" width="200" height="52" rx="6" fill="#ffffff" stroke="#1d8102"/>
+    <text x="780" y="272" font-size="12" fill="#232f3e" text-anchor="middle">Sandbox（実験用）</text>
+    <text x="780" y="290" font-size="10" fill="#555" text-anchor="middle">GR_ENCRYPTED_VOLUMES 適用済み</text>
+    <rect x="680" y="312" width="200" height="52" rx="6" fill="#ffffff" stroke="#1d8102"/>
+    <text x="780" y="334" font-size="12" fill="#232f3e" text-anchor="middle">Infrastructure</text>
+    <text x="780" y="352" font-size="10" fill="#555" text-anchor="middle">network / shared / operation</text>
+    <rect x="680" y="374" width="200" height="52" rx="6" fill="#ffffff" stroke="#1d8102"/>
+    <text x="780" y="396" font-size="12" fill="#232f3e" text-anchor="middle">Deployment ／ Suspended</text>
+    <text x="780" y="414" font-size="10" fill="#555" text-anchor="middle">CI/CD 専用 ／ 廃止アカウント隔離</text>
+    <rect x="40" y="462" width="860" height="58" rx="8" fill="#232f3e"/>
+    <text x="470" y="486" font-size="14" font-weight="bold" fill="#ff9900" text-anchor="middle">コントロール（ガードレール）: 予防的=SCP（親OUから継承）／ 発見的=Config Rules（OUごとに適用）</text>
+    <text x="470" y="508" font-size="12" fill="#ffffff" text-anchor="middle">＋ プロアクティブ（CloudFormation デプロイ前チェック）</text>
+    <rect x="40" y="532" width="860" height="58" rx="8" fill="#146eb4"/>
+    <text x="470" y="556" font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle">全アカウント自動有効: CloudTrail（操作ログ）／ AWS Config（設定記録）→ CloudTrail アカウントに集約</text>
+    <text x="470" y="578" font-size="12" fill="#d5e8f7" text-anchor="middle">Security Hub / GuardDuty の検知 → Aggregator アカウントに集約（フェーズ4・5）</text>
+  </svg>
+  </div>
+  <p>現在の OU 構成（すべて Control Tower 管理下）：</p>
+  <pre><code>Root
+├── 管理アカウント
+├── Security ── CloudTrail（ログ保管）／ Aggregator（監査集約）
+├── Sandbox
+├── Workloads ── dev ／ staging ／ prod
+├── Infrastructure ── network ／ shared ／ operation
+├── Deployment
+└── Suspended</code></pre>
+</section>
+
+<!-- ============ フェーズ0 ============ -->
+<section id="phase0">
+  <h2><span class="phase-label">フェーズ 0</span>事前準備 <span class="done">✅ 完了</span><span class="acct">操作: 管理アカウント（ルート）</span></h2>
+  <table>
+    <tr><th>項目</th><th>内容</th></tr>
+    <tr><td>ルートユーザー MFA</td><td>管理アカウントのルートに MFA 設定（セキュリティ認証情報 → MFA デバイスの割り当て）</td></tr>
+    <tr><td>ホームリージョン</td><td>東京（ap-northeast-1）。<strong>後から変更不可</strong>（解体＋AWSサポート対応が必要）</td></tr>
+    <tr><td>共有アカウント用メール</td><td>未使用のメールアドレス2つ（Audit 用 / Log Archive 用）</td></tr>
+    <tr><td>既存 Config / CloudTrail</td><td>新規アカウントは前提条件を自動的に満たす（公式）。既存の Config レコーダー / CloudTrail 証跡があると失敗・二重課金</td></tr>
+  </table>
+</section>
+
+<!-- ============ フェーズ2 ============ -->
+<section id="phase2">
+  <h2><span class="phase-label">フェーズ 2</span>Control Tower（Landing Zone） <span class="done">✅ 完了</span><span class="acct">操作: 管理アカウント</span></h2>
+  <p>コンソール：Control Tower → <code>ランディングゾーンの設定</code>（Set up landing zone）。所要約30分。※「コントロール専用環境」ではなくフル Landing Zone を選ぶこと。</p>
+
+  <h3>設定値（採用した構成）</h3>
+  <table>
+    <tr><th>設定</th><th>採用値</th><th>補足</th></tr>
+    <tr><td>ホームリージョン</td><td>東京（ap-northeast-1）</td><td>変更不可</td></tr>
+    <tr><td>追加ガバナンスリージョン</td><td>大阪（ap-northeast-3）のみ</td><td>US は不要：グローバルサービス（IAM / CloudFront / Route 53 等）はリージョン拒否 SCP の除外対象。CloudFront 用 ACM 証明書（us-east-1 必須）等の要件が出たら、後からリージョン追加 or <code>CT.MULTISERVICE.PV.1</code> の ExemptedActions で除外</td></tr>
+    <tr><td>リージョン拒否（Region deny）</td><td>有効</td><td>対象外リージョンの操作を SCP でブロック</td></tr>
+    <tr><td>基礎 OU / 追加 OU</td><td>Security / Sandbox（デフォルト）</td><td></td></tr>
+    <tr><td>共有アカウント</td><td>作成後 <strong>CloudTrail</strong>（＝Log Archive）と <strong>Aggregator</strong>（＝Audit）にリネーム済み</td><td>名前変更は Organizations コンソール or 対象アカウントのルートから可能。CT に自動反映、ドリフトにならない</td></tr>
+    <tr><td>KMS 暗号化</td><td><strong>使用しない</strong>（SSE-S3 のまま）</td><td>後から Landing zone settings の更新で追加可。追加時の要点：対称／単一リージョンキー（マルチリージョン・非対称は非対応）＋キーポリシーに <code>config.amazonaws.com</code> / <code>cloudtrail.amazonaws.com</code> の許可を必ず追記（怠ると「Insufficient permissions to access S3 bucket or KMS key」で失敗）</td></tr>
+    <tr><td>ログ保持期間</td><td>デフォルト（標準1年 / アクセスログ10年）</td><td></td></tr>
+  </table>
+
+  <h3>サービス統合（Configure Service integrations）</h3>
+  <table>
+    <tr><th>セクション</th><th>採用値</th></tr>
+    <tr><td>Default OU for service integrations</td><td>Security（デフォルト）</td></tr>
+    <tr><td>AWS Config for detective controls</td><td>有効（切ると発見的コントロール・ドリフト検知が動かない）</td></tr>
+    <tr><td>AWS CloudTrail centralized logging</td><td>有効（組織証跡。KMS 指定なし）</td></tr>
+    <tr><td>AWS IAM Identity Center account access</td><td>有効（Control Tower 管理）</td></tr>
+    <tr><td>AWS Backup</td><td>スキップ（未登録アカウント2個＋マルチリージョン KMS キーが必要。ワークロード稼働後に Landing Zone 更新で追加）</td></tr>
+  </table>
+
+  <h3>完了後の状態・実施済み事項</h3>
+  <ul>
+    <li>SNS 購読確認メール（Audit 用メール宛・リージョンごと）の <code>Confirm subscription</code> をクリック済み</li>
+    <li>Identity Center に管理者ユーザーが自動作成される（<strong>ルートと同じメールだが別のアイデンティティ</strong>）。招待受諾 → 別パスワード＋MFA 設定 → 以後の作業はアクセスポータルから <strong>AWSAdministratorAccess</strong> ロールで実施（AWSServiceCatalogEndUserAccess はアカウント払い出し専用ユーザー向け）</li>
+    <li>ルートユーザーは以後、緊急時以外使わない</li>
+    <li><strong>AWS Config はこのセットアップで自動有効化された</strong>：ウィザードの「AWS Config for detective controls」の選択に基づき、構築中（約30分）に共有アカウントへレコーダーを自動配備。Aggregator には<strong>組織全体の Config アグリゲータ</strong>も作成される。メンバーアカウントへは OU 登録時に配備。<strong>レコーダーの停止・設定変更は禁止</strong>（CT 管理リソース、必須コントロールで保護）</li>
+  </ul>
+</section>
+
+<!-- ============ フェーズ3 ============ -->
+<section id="phase3">
+  <h2><span class="phase-label">フェーズ 3</span>OU 設計・コントロール <span class="todo">🔄 進行中</span><span class="acct">操作: 管理アカウント</span></h2>
+
+  <h3>OU 構成 <span class="done">✅ 作成済み</span></h3>
+  <table>
+    <tr><th>OU</th><th>用途</th></tr>
+    <tr><td>Security（CT 自動管理）</td><td>CloudTrail / Aggregator 専用。OU の baseline status が「Not applicable」なのは v4.0 の正常仕様（サービス統合中央ベースラインで CT が直接管理。手動登録は不要・不可）</td></tr>
+    <tr><td>Sandbox</td><td>実験用。コントロールの試験場</td></tr>
+    <tr><td>Workloads（dev / staging / prod）</td><td>アプリ本体。環境別にコントロールを適用</td></tr>
+    <tr><td>Infrastructure（network / shared / operation）</td><td>共有インフラ。アプリは置かない</td></tr>
+    <tr><td>Deployment</td><td>CI/CD 専用</td></tr>
+    <tr><td>Suspended</td><td>廃止アカウント隔離。空のまま。将来 DenyAll SCP を付ける際は CT 登録済みのためドリフトに注意 → その時は未登録の隔離 OU を別途作るのが推奨</td></tr>
+    <tr><td>Policy_Staging（作成しない）</td><td>専用 OU は作らない方針。SCP / RCP / コントロールのテストは <strong>Sandbox OU で実施</strong>する</td></tr>
+  </table>
+  <p>※ baseline status の読み方：Enabled ＝ CT のガバナンス対象／ Not enabled ＝ 未登録（Register OU で登録）。
+  <strong>管理アカウントの Not enabled は正常</strong>（ベースライン対象外。SCP も効かないため「ワークロードを置かない」運用で守る）。
+  <strong>「AWS Config baseline」列が Not enabled なのも正常</strong>：この列は CT フル登録しない OU 向けの軽量版（ConfigBaseline）用で、AWSControlTowerBaseline とは排他（同一 OU に片方のみ）。フル登録済み OU では Config リソースは CT baseline に含まれて配備済み。</p>
+
+  <h3>アカウント配置計画 <span class="todo">⬜ 以下5アカウントを作成予定</span>（払い出しはフェーズ6の Account Factory で）</h3>
+  <table>
+    <tr><th>配置先</th><th>アカウント名</th><th>役割</th></tr>
+    <tr><td>Infrastructure/network</td><td><code>Network</code></td><td>Transit Gateway ハブ（RAM で共有）、Egress VPC、Route 53 Resolver、Network Firewall、VPN / DX</td></tr>
+    <tr><td>Infrastructure/shared</td><td><code>Shared</code></td><td>AD・共有リポジトリ・ゴールデン AMI 等の共有 IT サービス</td></tr>
+    <tr><td>Infrastructure/operation</td><td><code>Operation</code></td><td>運用監視の集約（ダッシュボード・運用自動化）</td></tr>
+    <tr><td>Deployment</td><td><code>Infra CICD</code></td><td>インフラ用 Terraform 実行＋<strong>State 格納 S3</strong>（バージョニング＋暗号化＋公開ブロック。State はデプロイ先ごとにキー分割。ロックは DynamoDB or TF1.10+ の S3 ネイティブ）→ Network / Shared / Operation へクロスアカウントデプロイ</td></tr>
+    <tr><td>Deployment</td><td><code>App CICD</code></td><td>アプリ標準パイプライン（CodeBuild / CodePipeline）→ dev / staging / prod へクロスアカウントデプロイ</td></tr>
+  </table>
+  <div class="danger">CI/CD・Terraform State を管理アカウントに置かない（SCP が効かない場所に全環境への変更権限を置くことになる）。Workloads のランタイムとの同居も避ける。デプロイはデプロイ先の専用 IAM ロールを AssumeRole する方式で、人間には prod の書き込み権限を配らない。</div>
+
+  <h3>コントロール（ガードレール）</h3>
+  <table>
+    <tr><th>種類</th><th>実装</th><th>継承</th><th>適用方針</th></tr>
+    <tr><td>予防的（Preventive）</td><td>SCP</td><td><strong>親 OU から配下へ自動継承</strong></td><td>できるだけ上位の OU（Workloads / Infrastructure / Deployment）に適用</td></tr>
+    <tr><td>発見的（Detective）</td><td>AWS Config Rules（CT が配布）</td><td><strong>継承されない</strong></td><td>監視したい各子 OU（dev / staging / prod / network / shared / operation）に個別適用。アカウントが直接入る OU に適用しないと効かない</td></tr>
+    <tr><td>プロアクティブ（Proactive）</td><td>CloudFormation フック</td><td>—</td><td>IaC 運用開始後に検討</td></tr>
+  </table>
+  <ul>
+    <li>適用はコンソール：Control Tower → <code>コントロール</code> → ID / 名前で検索 → <code>OU でコントロールを有効化</code>。<strong>1件ずつ順番に</strong>（並行実行不可、1件数分）</li>
+    <li>発見的コントロールは Config を裏側で使うが、<strong>同じ目的の Config ルールを自前で作る必要はない</strong>（二重管理になる）。Config 記録自体は全アカウント有効化済み</li>
+    <li><strong>SH.xxx（Security Hub 所有）コントロールはまだ有効化しない</strong>：有効化した時点で Service-Managed Standard が作成されフェーズ4が始まってしまう。まずは AWS-GR_xxx（CT 所有）で</li>
+    <li>Security Hub 所有コントロールの結果は CT のコンプライアンスステータスに集計されない（コンソールの注意書きは正常）→ 定期チェックは Security Hub（Aggregator）に一本化する運用にする</li>
+    <li>監査フレームワーク対応時は Control Catalog のフレームワーク検索（CIS v8.0 / ISO 27001 / PCI-DSS v4.0 等）を利用</li>
+  </ul>
+  <p><span class="done">✅ 適用済み</span>：<code>AWS-GR_ENCRYPTED_VOLUMES</code>（EBS 暗号化検知・発見的・MEDIUM）を Sandbox OU に適用。
+  候補の2つ目：<code>AWS-GR_S3_BUCKET_PUBLIC_READ_PROHIBITED</code>（S3 パブリック読み取り検知）。</p>
+
+  <h3>コントロール検証手順（AWS-GR_ENCRYPTED_VOLUMES）<span class="todo">⬜ 未実施</span></h3>
+  <ol>
+    <li>【管理アカウント】Control Tower → Account Factory → テスト用アカウントを Sandbox OU に作成（未使用メール、名前例：<code>Sandbox Test</code>、約30分）。作成と同時にガードレール・Config が自動適用される</li>
+    <li>【テストアカウント】アクセスポータルから入り、EC2 コンソール（東京）→ インスタンスを起動：Amazon Linux ／ t3.micro ／ ストレージはデフォルトのまま（<strong>暗号化なし</strong>）→ 起動。<br>
+    ※このコントロールは「<strong>インスタンスにアタッチされた</strong>非暗号化 EBS」を検知するため、ボリューム単体ではなくインスタンスごと作成する</li>
+    <li>15〜30分待つ（Config が変更を記録 → ルールが評価）</li>
+    <li>【管理アカウント】Control Tower → 組織 → テストアカウント（または Sandbox OU）→ コンプライアンス = <strong>Noncompliant</strong> になり、非準拠リソースに EBS ボリュームが表示されることを確認（テストアカウントの Config コンソール → ルールでも確認可）</li>
+    <li>後片付け：インスタンスを終了（EBS も同時削除）→ Compliant に戻ることを確認。コストは数円</li>
+    <li>検証 OK なら「強く推奨」カテゴリを本適用：<strong>予防的 → Workloads / Infrastructure / Deployment（親 OU に適用、配下へ継承）</strong>、<strong>発見的 → dev / staging / prod / network / shared / operation（各子 OU に個別適用）</strong></li>
+  </ol>
+</section>
+
+<!-- ============ フェーズ4 ============ -->
+<section id="phase4">
+  <h2><span class="phase-label">フェーズ 4</span>Security Hub CSPM <span class="done">✅ 完了</span>（Slack 通知のみ残）<span class="acct">操作: 管理アカウント → Aggregator</span></h2>
+  <p>※「Security Hub CSPM」＝従来のSecurity Hub（本フェーズの対象）。「Security Hub（統合版）」＝2025年登場の相関分析製品（将来検討）。<br>
+  <strong>中央設定とは</strong>：Security Hub は本来アカウント×リージョン単位でバラバラに設定するサービス。委任管理者（Aggregator）が「設定ポリシー」を1枚作成して組織全体へ自動配布する仕組みで、新規アカウントにも自動適用され、メンバー側では変更不可（＝統制）になる。</p>
+  <ol>
+    <li><span class="done">✅</span>【<strong>管理アカウント</strong>】委任管理者 = <strong>Aggregator</strong> を指定。委任後はコンソールが委任先ビューに自動切替。管理 / CloudTrail アカウントで Security Hub コンソールが開けないのは正常</li>
+    <li><span class="done">✅</span>【<strong>Aggregator</strong>】標準の整理：デフォルト有効だった <strong>CIS v1.2.0 を無効化</strong>（2018年版・FSBP と重複、コストとノイズ増のみ）。有効な標準 = <strong>FSBP v1.0.0 ＋ AWS Resource Tagging Standard v1.0.0</strong>（Tagging はタグ未設定リソースを検出。重要度低のため Slack 通知には乗らない）。PCI / NIST は要件なし、CIS が必要になったら最新版（v3.0.0）を選ぶ</li>
+    <li><span class="done">✅</span>【<strong>Aggregator</strong>】中央設定：ホームリージョン = 東京、リンクリージョン = 大阪、<strong>Link future Regions = チェックなし</strong>（→ 将来ガバナンスリージョンを追加する際は中央設定へのリージョン追加も忘れずに）、設定ポリシー = FSBP ＋ Tagging、適用先 = 組織全体</li>
+    <li><span class="todo">⬜</span>【<strong>Aggregator</strong>】<strong>Slack 通知</strong>：findings → EventBridge ルール（フィルタ：<strong>Severity = CRITICAL / HIGH ＋ Workflow = NEW ＋ Record State = ACTIVE</strong>）→ SNS → AWS Chatbot → Slack。設置は Aggregator × 東京の1箇所（集約先なので組織全体＋GuardDuty 分もカバー）</li>
+    <li>【<strong>管理アカウント</strong>】CT 統合（任意）：SH.xxx コントロールを使う場合のみ Control Tower 側から OU 単位で有効化（Service-Managed Standard が自動作成される）</li>
+  </ol>
+  <div class="danger">CT 経由で有効化したコントロールを Security Hub 側から直接無効化しない（ドリフト）。中央設定の開始後は委任管理者を変更できない。</div>
+
+  <h3>管理アカウントの特別対応（中央設定エラーの解消手順）<span class="done">✅ 解消済み</span></h3>
+  <p>ポリシーを組織全体に適用すると、<strong>管理アカウントだけ「Security Hub is not enabled in the organization management account」エラーで失敗する</strong>（委任管理者は管理アカウントに Security Hub を有効化できない仕様）。
+  かといって管理アカウント側で直接有効化しようとすると「only the administrator can access this operation」でブロックされる（ポリシー関連付けが残っているため）。以下の順で解消する：</p>
+  <ol>
+    <li>【<strong>Aggregator</strong>】設定（Configuration）→ 管理アカウントを選択 → <strong>自己管理（Self-managed）に切替</strong>（ポリシーの縛りを一時解除）</li>
+    <li>【<strong>管理アカウント</strong>】<strong>AWS Config を有効化</strong>（Security Hub 有効化の前提条件。東京 → 大阪の順に2回）
+      <table>
+        <tr><th>項目</th><th>東京</th><th>大阪</th></tr>
+        <tr><td>記録戦略 ／ 頻度</td><td colspan="2">すべてのリソースタイプ ／ 継続的</td></tr>
+        <tr><td>グローバルリソース（IAM 等）の記録</td><td><strong>ON</strong></td><td><strong>OFF</strong>（両方 ON だと二重記録・二重課金）</td></tr>
+        <tr><td>IAM ロール</td><td colspan="2">サービスリンクロール（AWSServiceRoleForConfig）</td></tr>
+        <tr><td>S3 バケット</td><td>ローカル新規作成（<code>config-bucket-&lt;アカウントID&gt;</code>）</td><td>東京のバケットを指定（クロスリージョン配信可。履歴ファイルは KB 級のため転送料は月数円未満）</td></tr>
+        <tr><td>SNS ／ Config ルール</td><td colspan="2">なし（ルールは Security Hub が自動管理）</td></tr>
+      </table>
+      組織への集約は S3 の共有ではなく<strong>組織 Config アグリゲータ（Aggregator 内）が自動で行う</strong>ため、レコーダー ON だけで管理アカウントも横断ビューの対象になる。CT の中央バケットへの相乗りは不要</li>
+    <li>【<strong>管理アカウント</strong>】<strong>Security Hub を有効化</strong>（東京・大阪。標準の選択は何でも可 — 次のステップでポリシーが上書きする）</li>
+    <li>【<strong>Aggregator</strong>】設定 → 管理アカウントを<strong>中央設定ポリシーに再関連付け</strong> → ステータス「適用済み（Applied）」を確認して完了</li>
+  </ol>
+</section>
+
+<!-- ============ フェーズ5 ============ -->
+<section id="phase5">
+  <h2><span class="phase-label">フェーズ 5</span>GuardDuty / Access Analyzer <span class="done">✅ GuardDuty 完了</span><span class="acct">操作: 管理アカウント → Aggregator</span></h2>
+  <h3>GuardDuty <span class="done">✅ 完了</span></h3>
+  <ul>
+    <li>委任管理者 = <strong>Aggregator</strong>、自動有効化 = ALL、<strong>全保護プラン有効</strong>（Foundational / S3 / Runtime Monitoring（EC2・ECS・EKS）/ Lambda / Malware Protection for EC2）。東京・大阪の両リージョンで設定</li>
+    <li>課金は「有効化」ではなく<strong>使用量ベース</strong>：監視対象リソースが無いプランは $0（例：EKS が無ければ EKS 分の課金なし）。放置時は Foundational の CloudTrail 管理イベント分のみ ≒ 月 $1〜5</li>
+    <li>各プラン<strong>30日無料トライアル</strong>中 → <span class="todo">⬜ 終了前（8月上旬）に GuardDuty「使用状況（Usage）」画面で月額試算を確認</span>し、不要プランがあれば絞る</li>
+    <li>検知結果は Security Hub（Aggregator）に自動連携 → Slack 通知も同じ経路に乗る（追加設定不要）</li>
+  </ul>
+  <h3>IAM Access Analyzer <span class="todo">⬜ 未実施</span></h3>
+  <p>【<strong>管理アカウント</strong>】IAM コンソール → Access Analyzer → アナライザー作成 → 信頼ゾーン：<strong>組織（Organization）</strong>（組織外からアクセス可能なリソースを検知）。無料。</p>
+</section>
+
+<!-- ============ フェーズ6 ============ -->
+<section id="phase6">
+  <h2><span class="phase-label">フェーズ 6</span>Account Factory <span class="todo">⬜ 未着手</span><span class="acct">操作: 管理アカウント</span></h2>
+  <ol>
+    <li>Control Tower → <code>Account Factory</code> → <code>アカウントの作成</code></li>
+    <li>未使用メール＋表示名（命名規則 <code>&lt;project&gt;-&lt;env&gt;-&lt;resource&gt;</code>、例 <code>myapp-dev-app</code>）＋担当者の Identity Center メール＋配置先 OU → 作成（約30分）</li>
+  </ol>
+  <ul>
+    <li>アカウント作成は<strong>必ず Account Factory 経由</strong>（Organizations から直接作らない）。ガードレール・CloudTrail・Config 適用済みで払い出される</li>
+    <li>Landing Zone 設定の「アカウントの自動登録」を有効にすると、OU への移動だけで自動登録される（2025年11月〜）</li>
+    <li>権限セットは AdministratorAccess を安易に配らず用途別に作成。prod への権限付与は最小限のメンバーに</li>
+    <li>Terraform でのアカウント払い出しを標準化したくなったら AFT（Account Factory for Terraform）を検討</li>
+  </ul>
+</section>
+
+<!-- ============ 追加ガバナンス ============ -->
+<section id="extras">
+  <h2>追加ガバナンス機能 <span class="todo">⬜ 未着手</span>（いずれも無料）<span class="acct">操作: 管理アカウント</span></h2>
+  <h3>① ルートアクセスの集中管理（推奨）</h3>
+  <p>IAM コンソール（管理アカウント）→ <code>アカウント設定</code> → ルートアクセス管理を有効化（委任管理者：Aggregator）→ メンバーアカウントのルート認証情報を削除。以後ルート作業は短期・タスク限定セッションで中央から払い出す。※管理アカウント自身のルートは対象外（MFA 付きで厳重保管を継続）。</p>
+  <h3>② RCP（Resource Control Policies）</h3>
+  <p>SCP が「人の操作」を制限するのに対し、RCP は「リソース側へのアクセス」を制限（例：組織外から自社 S3 / KMS / Secrets Manager へのアクセスを全面遮断＝データ境界）。Organizations コンソール → ポリシー → RCP を有効化 → <strong>Sandbox OU でテストしてから</strong>本適用。対応：S3 / STS / KMS / SQS / Secrets Manager。</p>
+  <h3>③ その他（必要になったら）</h3>
+  <table>
+    <tr><th>機能</th><th>用途</th><th>導入時期</th></tr>
+    <tr><td>タグポリシー</td><td><code>project</code> / <code>env</code> タグの強制</td><td>コスト配分の本格化時</td></tr>
+    <tr><td>宣言型ポリシー</td><td>EBS 常時暗号化・AMI 公開禁止などの組織強制</td><td>ワークロード増加時</td></tr>
+    <tr><td>Inspector / Macie / Detective</td><td>脆弱性スキャン / 機密データ検出 / 侵害調査</td><td>実ワークロード稼働後（従量課金）</td></tr>
+    <tr><td>Audit Manager / Artifact</td><td>監査レポート自動化 / AWS の監査資料入手</td><td>外部監査対応時</td></tr>
+    <tr><td>LZA（Landing Zone Accelerator）</td><td>組織設定の IaC 化（CDK ベース・CT の上に被せる公式ソリューション）</td><td>アカウント数増加・変更履歴管理が必要になったら</td></tr>
+  </table>
+</section>
+
+<!-- ============ コスト ============ -->
+<section id="cost">
+  <h2>コスト</h2>
+  <table>
+    <tr><th>項目</th><th>課金</th></tr>
+    <tr><td>Organizations / OU / SCP / RCP / Identity Center / CT 本体</td><td>無料</td></tr>
+    <tr><td>AWS Config</td><td>設定項目 $0.003/件、ルール評価 $0.001/回。リソース作成・削除の繰り返しで増える（主要コスト要因）</td></tr>
+    <tr><td>CloudTrail / S3</td><td>放置時は数円レベル</td></tr>
+    <tr><td>Security Hub / GuardDuty</td><td>従量課金。<strong>各30日無料トライアル</strong>（有効化日から起算）</td></tr>
+  </table>
+  <p><strong>放置時の月額目安</strong>（東京＋大阪・アカウント4個規模）：基本構成 $3〜10 ／ Security Hub＋GuardDuty 込み $15〜40。</p>
+  <ul>
+    <li>ガバナンスリージョンは使う分だけ（コストはリージョン数×アカウント数に比例）</li>
+    <li>AWS Budgets で予算アラート設定（例：$20 超過で通知。2個まで無料）</li>
+  </ul>
+  <div class="danger">Control Tower の解体（decommission）は手間が大きく、共有アカウント閉鎖に90日待機が必要。検証後も壊さず残して本利用の土台にするのが現実的。</div>
+</section>
+
+<!-- ============ 禁止事項 ============ -->
+<section id="rules">
+  <h2>運用の禁止事項（ドリフト・事故防止）</h2>
+  <ul class="checklist">
+    <li>管理アカウントでワークロード（EC2 / S3 等）を動かさない</li>
+    <li>CT が作ったリソース（組織証跡・Config・SCP・共有アカウント内の自動デプロイ資産）を手動変更・削除しない</li>
+    <li>OU・アカウント操作は Control Tower コンソールから行う（Organizations 直接操作は登録漏れの原因）</li>
+    <li>CT 経由で有効化したコントロールを Security Hub 側から無効化しない</li>
+    <li>CloudTrail / Aggregator アカウントを他 OU へ移動しない。Security OU に他のアカウントを入れない</li>
+    <li>アカウント作成は Account Factory 経由。ルートユーザーは緊急時以外使わない</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <p>AWS 公式ドキュメント（Control Tower / Organizations / Security Hub / GuardDuty 各ユーザーガイド、マルチアカウント戦略ホワイトペーパー）準拠 ／ 最終更新: 2026-07-09</p>
+</footer>
+
+</body>
+</html>
