@@ -73,6 +73,7 @@
     <li><a href="#cost">コスト</a></li>
     <li><a href="#rules">運用の禁止事項</a></li>
     <li><a href="#terraform">付録: 管理アカウントの Terraform 化</a></li>
+    <li><a href="#realtime">付録: 設定変更のリアルタイム検知</a></li>
   </ol>
 </nav>
 
@@ -585,6 +586,50 @@ terraform import aws_config_configuration_recorder_status.osaka default
 terraform import aws_securityhub_account.tokyo &lt;管理アカウントID&gt;
 terraform import aws_securityhub_account.osaka &lt;管理アカウントID&gt;
 terraform import aws_securityhub_configuration_policy_association.mgmt &lt;管理アカウントID&gt;</code></pre>
+</section>
+
+<!-- ============ 付録: リアルタイム検知 ============ -->
+<section id="realtime">
+  <h2>付録: 設定変更のリアルタイム検知（SCP・組織変更）<span class="acct">設置: 管理アカウント × us-east-1</span></h2>
+  <p>CT 管理 SCP（<code>aws-guardrails-*</code>）の改変や組織構造の変更を、発生した瞬間（秒〜1分）に通知する構成。CloudTrail に記録される API 操作を EventBridge で捕捉する。</p>
+
+  <h3>検知の仕組みの使い分け</h3>
+  <table>
+    <tr><th>仕組み</th><th>検知対象</th><th>速度</th></tr>
+    <tr><td><strong>EventBridge（CloudTrail イベント連動）</strong></td><td>特定の API 操作（SCP 変更・デタッチ、組織離脱など）</td><td>ほぼリアルタイム</td></tr>
+    <tr><td>Control Tower ドリフト検知</td><td>CT 管理リソースの逸脱（SCP 改変含む）。通知先 = Aggregator の <code>aws-controltower-AggregateSecurityNotifications</code></td><td>数分〜</td></tr>
+    <tr><td>AWS Config / Security Hub</td><td>リソース設定の記録・ベストプラクティス違反</td><td>数分〜定期</td></tr>
+  </table>
+
+  <h3>構築手順</h3>
+  <div class="warn">Organizations はグローバルサービスのため、CloudTrail イベントは <strong>us-east-1 に配信される</strong>。EventBridge ルールは「管理アカウント × us-east-1」に作ること（東京に作っても発火しない）。管理アカウントはリージョン拒否の対象外なので作成可能。</div>
+  <ol>
+    <li>【管理アカウント × us-east-1】SNS トピック作成（例：<code>org-policy-change-alerts</code>）→ 通知先（メール or Chatbot）をサブスクライブ</li>
+    <li>同リージョンで EventBridge → ルール作成 → イベントパターン：
+      <pre><code>{
+  "source": ["aws.organizations"],
+  "detail-type": ["AWS API Call via CloudTrail"],
+  "detail": {
+    "eventSource": ["organizations.amazonaws.com"],
+    "eventName": [
+      "CreatePolicy", "UpdatePolicy", "DeletePolicy",
+      "AttachPolicy", "DetachPolicy",
+      "LeaveOrganization", "RemoveAccountFromOrganization"
+    ]
+  }
+}</code></pre>
+    </li>
+    <li>ターゲット = 作成した SNS トピック → 完了。通知本文（CloudTrail イベント）に実行者・時刻・変更対象が含まれるため、そのまま初動調査に使える</li>
+  </ol>
+
+  <h3>Slack 通知への統合（最終形）</h3>
+  <table>
+    <tr><th>通知元</th><th>設置場所</th><th>内容</th></tr>
+    <tr><td>Security Hub findings（CRITICAL / HIGH）</td><td>Aggregator × 東京</td><td>セキュリティ違反</td></tr>
+    <tr><td>CT ドリフト通知（AggregateSecurityNotifications）</td><td>Aggregator × 東京</td><td>ガバナンス逸脱</td></tr>
+    <tr><td>Organizations API 監視（本付録）</td><td>管理アカウント × us-east-1</td><td>SCP・組織構造の変更</td></tr>
+  </table>
+  <p>3経路とも同じ AWS Chatbot → Slack チャンネルに集約すれば、ガバナンスに関わる変化を1箇所で把握できる。</p>
 </section>
 
 </main>
